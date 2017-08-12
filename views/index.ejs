@@ -1,0 +1,223 @@
+<!--
+ *  Copyright (c) 2015, Facebook, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the license found in the
+ *  LICENSE file in the root directory of this source tree.
+ *
+-->
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+    </style>
+    <link href="/index.css" rel="stylesheet" />
+    <link href="//cdn.jsdelivr.net/graphiql/0.6.6/graphiql.css" rel="stylesheet" />
+    <script src="//cdn.jsdelivr.net/fetch/0.9.0/fetch.min.js"></script>
+    <script src="//cdn.jsdelivr.net/react/0.14.7/react.min.js"></script>
+    <script src="//cdn.jsdelivr.net/react/0.14.7/react-dom.min.js"></script>
+    <script src="//cdn.jsdelivr.net/graphiql/0.6.6/graphiql.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-core/5.8.23/browser.min.js"></script>
+    <script src="/js.cookie.js"></script>
+</head>
+<body>
+<div id="graphiql">Loading...</div>
+<script type="text/babel">
+
+    /**
+     * This GraphiQL example illustrates how to use some of GraphiQL's props
+     * in order to enable reading and updating the URL parameters, making
+     * link sharing of queries a little bit easier.
+     *
+     * This is only one example of this kind of feature, GraphiQL exposes
+     * various React params to enable interesting integrations.
+     */
+
+    var parameters = {};
+    window.location.search.substr(1).split('&').forEach(function (entry) {
+        var eq = entry.indexOf('=');
+        if (eq >= 0) {
+            parameters[decodeURIComponent(entry.slice(0, eq))] =
+                    decodeURIComponent(entry.slice(eq + 1));
+        }
+    });
+
+    // Produce a Location query string from a parameter object.
+    function locationQuery(params) {
+        return '?' + Object.keys(params).map(function (key) {
+                    return encodeURIComponent(key) + '=' +
+                            encodeURIComponent(params[key]);
+                }).join('&');
+    }
+
+    // Derive a fetch URL from the current URL, sans the GraphQL parameters.
+    var graphqlParamNames = {
+        query: true,
+        variables: true,
+        operationName: true
+    };
+
+    var otherParams = {};
+    for (var k in parameters) {
+        if (parameters.hasOwnProperty(k) && graphqlParamNames[k] !== true) {
+            otherParams[k] = parameters[k];
+        }
+    }
+    // var fetchURL = locationQuery(otherParams);
+    // Defines a GraphQL fetcher using the fetch API.
+    function graphQLFetcher(graphQLParams) {
+      return fetch('http://' + window.location.href.split("/")[2] + '/graphql', {
+            method: 'post',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(graphQLParams),
+            credentials: 'include',
+        }).then(function (response) {
+
+          return response.text();
+        }).then(function (responseBody) {
+            try {
+                const {errors} = JSON.parse(responseBody)
+                if (errors) {
+                    if (JSON.stringify(errors[0].message).indexOf('用户未登陆') > -1 || JSON.stringify(errors[0].message).indexOf('用户未登录') > -1 ){
+                        Cookies.remove("X-AccessToken")
+                        Cookies.remove("X-DeviceId")
+                        alert(JSON.stringify(errors[0].message))
+                        location.reload()
+                        return
+                    }
+                }
+                return JSON.parse(responseBody);
+            } catch (error) {
+                return responseBody;
+            }
+        });
+    }
+
+    // When the query and variables string is edited, update the URL bar so
+    // that it can be easily shared.
+    function onEditQuery(newQuery) {
+        parameters.query = newQuery;
+        updateURL();
+    }
+
+    function onEditVariables(newVariables) {
+        parameters.variables = newVariables;
+        updateURL();
+    }
+
+    function onEditOperationName(newOperationName) {
+        parameters.operationName = newOperationName;
+        updateURL();
+    }
+
+    function updateURL() {
+        history.replaceState(null, null, locationQuery(parameters));
+    }
+
+    var _self;
+    const GraphiQLRoot = React.createClass({
+        getInitialState: function() {
+            return {
+                isLogin: false,
+                phoneNumber: null,
+                password: null,
+            };
+        },
+        componentWillMount() {
+            _self = this
+            if (Cookies.get('X-AccessToken') && Cookies.get('X-DeviceId')) {
+                this.setState({isLogin: true})
+            } else {
+                this.setState({isLogin: false})
+            }
+        },
+        handleSubmit: function(e) {
+            e.preventDefault()
+            let phoneNumber = this.refs.phoneNumber.value.trim()
+            let password = this.refs.password.value.trim()
+            if (!phoneNumber || !password) {
+                return;
+            }
+            const query = {
+                query: `mutation {
+                    loginWithPhoneAndPass(
+                        input:{
+                            phoneNumber:"`+ phoneNumber +`",
+                            password:"`+ password +`",
+                            application:{
+                                type: WebGraphql
+                            }
+                            clientMutationId:"`+ phoneNumber +`"
+                        }){
+                            me {
+                              id
+                              loginUser {
+                                id
+                                phoneNumber
+                                roles
+                                permissions
+                              }
+                              device {
+                                accessToken
+                                deviceId
+                              }
+                            }
+                        }
+                     }`,
+                variables: "{}",
+                operationName: undefined
+            }
+            graphQLFetcher(query).then(function(response){
+                console.log(response)
+                const {data ,errors} = response
+                if (errors) {
+                    alert(JSON.stringify(errors[0].message))
+                } else {
+                    if (data.loginWithPhoneAndPass.me.loginUser) {
+                        Cookies.set("X-AccessToken",data.loginWithPhoneAndPass.me.device.accessToken)
+                        Cookies.set("X-DeviceId", data.loginWithPhoneAndPass.me.device.deviceId)
+                        _self.setState({isLogin: true});
+                    } else {
+                        alert('没有权限访问!')
+                    }
+                }
+            });
+            this.refs.password.value = '';
+            return;
+        },
+        render: function() {
+            return !this.state.isLogin ?  (
+               <div className="login-box">
+                    <div className="login-logo">GraphiQL</div>
+                    <div className="login-box-body">
+                        <form onSubmit={this.handleSubmit} >
+                           <div className="form-group"><input className="form-control" type="text" ref="phoneNumber" placeholder="手机号"/></div>
+                            <div className="form-group"> <input className="form-control" type="password" ref="password" placeholder="密码" /> </div>
+                           <div className="form-group"> <input className="btn" type="submit" value="登录"></input></div>
+                        </form>
+                    </div>
+                </div>
+            ) : (
+                React.createElement(GraphiQL, {
+                    fetcher: graphQLFetcher,
+                    onEditQuery: onEditQuery,
+                    onEditVariables: onEditVariables,
+                    onEditOperationName: onEditOperationName,
+                    query: null,
+                    response: null,
+                    variables: null,
+                    operationName: null
+                })
+            )
+        }
+    });
+    ReactDOM.render(
+            React.createElement(GraphiQLRoot, {}),
+            document.getElementById('graphiql')
+    )
+</script>
+</body>
+</html>
